@@ -53,6 +53,6 @@ These only work on the main menu.
 
 ## Screenshots
 
-![Main menu](screenshots/main_screen.png)
-![Race](screenshots/race.png)
-![Track editor](screenshots/map_editor.png)
+<img src="screenshots/main_screen.png" alt="Main menu" width="360">
+<img src="screenshots/race.png" alt="Race" width="360">
+<img src="screenshots/map_editor.png" alt="Track editor" width="360">
