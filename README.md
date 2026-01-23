@@ -50,3 +50,9 @@ These only work on the main menu.
     - you can also modify tracks 1-3 in creator mode
 - 2+5+0: reset all player best times and ghosts
 - 1+3+7: toggle cheater mode (marks creator records as beaten)
+
+## Screenshots
+
+![Main menu](screenshots/main_screen.png)
+![Race](screenshots/race.png)
+![Track editor](screenshots/map_editor.png)
