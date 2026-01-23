@@ -53,6 +53,8 @@ These only work on the main menu.
 
 ## Screenshots
 
-<img src="screenshots/main_screen.png" alt="Main menu" width="360">
-<img src="screenshots/race.png" alt="Race" width="360">
-<img src="screenshots/map_editor.png" alt="Track editor" width="360">
+<p>
+  <img src="screenshots/main_screen.png" alt="Main menu" width="280">
+  <img src="screenshots/race.png" alt="Race" width="280">
+  <img src="screenshots/map_editor.png" alt="Track editor" width="280">
+</p>
