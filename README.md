@@ -8,6 +8,15 @@ Top-down racing prototype built with Pygame. Includes time trials, ghosts, creat
 uv run -m src.main
 ```
 
+## Run (Without uv)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python -m src.main
+```
+
 ## How To Play
 
 ### Main Menu
