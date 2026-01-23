@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+.DS_Store
+.env
+.venv/
+idea.md
+data/best_times.db
+data/replays/*_last.json
+data/replays/custom_creator.json
