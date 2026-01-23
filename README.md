@@ -54,7 +54,7 @@ These only work on the main menu.
 ## Screenshots
 
 <p>
-  <img src="screenshots/main_screen.png" alt="Main menu" width="280">
-  <img src="screenshots/race.png" alt="Race" width="280">
-  <img src="screenshots/map_editor.png" alt="Track editor" width="280">
+  <img src="screenshots/main_screen.png" alt="Main menu" width="240">
+  <img src="screenshots/race.png" alt="Race" width="240">
+  <img src="screenshots/map_editor.png" alt="Track editor" width="240">
 </p>
