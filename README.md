@@ -51,6 +51,15 @@ These only work on the main menu.
 - 2+5+0: reset all player best times and ghosts
 - 1+3+7: toggle cheater mode (marks creator records as beaten)
 
+## Development
+
+- Vibe Coding Tool: Open Code (https://opencode.ai/)
+- Model: GPT 5.2 Codex
+- Development Costs: ~$10
+- Development Duration: ~4h
+- Input Token: ~31M
+- Output Token: ~180k
+
 ## Screenshots
 
 <p>
