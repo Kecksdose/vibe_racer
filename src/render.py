@@ -36,6 +36,8 @@ def render_frame(
     creator_ghost_enabled: bool,
     creator_ghost_available: bool,
     checkpoint_status: str,
+    last_checkpoint_time_ms: int | None,
+    last_checkpoint_delta_ms: int | None,
     visited_checkpoints: set[tuple[int, int]],
     countdown_value: float | None,
     show_go_flash: bool,
@@ -80,6 +82,8 @@ def render_frame(
         creator_ghost_enabled,
         creator_ghost_available,
         checkpoint_status,
+        last_checkpoint_time_ms,
+        last_checkpoint_delta_ms,
         show_best_time,
         show_creator_time,
         hint_text,
@@ -160,6 +164,8 @@ def _draw_hud(
     creator_ghost_enabled: bool,
     creator_ghost_available: bool,
     checkpoint_status: str,
+    last_checkpoint_time_ms: int | None,
+    last_checkpoint_delta_ms: int | None,
     show_best_time: bool,
     show_creator_time: bool,
     hint_text: str | None,
@@ -167,6 +173,11 @@ def _draw_hud(
     font = pygame.font.SysFont(
         ["Consolas", "Menlo", "Courier New", "Courier", "monospace"],
         16,
+    )
+    font_bold = pygame.font.SysFont(
+        ["Consolas", "Menlo", "Courier New", "Courier", "monospace"],
+        20,
+        bold=True,
     )
     elapsed_seconds = elapsed_ms / 1000.0
     timer_text = f"Time: {elapsed_seconds:0.3f}s"
@@ -177,8 +188,13 @@ def _draw_hud(
             else f"Best: {best_time_ms / 1000.0:0.3f}s"
         )
         header_text = f"{timer_text}  |  {best_text}"
-        if show_creator_time and creator_time_ms is not None:
-            header_text = f"{header_text}  |  Creator: {creator_time_ms / 1000.0:0.3f}s"
+        if show_creator_time:
+            creator_text = (
+                "Creator: --"
+                if creator_time_ms is None
+                else f"Creator: {creator_time_ms / 1000.0:0.3f}s"
+            )
+            header_text = f"{header_text}  |  {creator_text}"
     else:
         header_text = timer_text
     surface = font.render(header_text, True, (230, 230, 235))
@@ -187,6 +203,35 @@ def _draw_hud(
     checkpoint_surface = font.render(checkpoint_status, True, (230, 230, 235))
     checkpoint_x = screen.get_width() - checkpoint_surface.get_width() - 12
     screen.blit(checkpoint_surface, (checkpoint_x, 12))
+
+    if last_checkpoint_time_ms is not None:
+        time_text = f"CP Time: {last_checkpoint_time_ms / 1000.0:0.3f}s"
+
+        if last_checkpoint_delta_ms is not None:
+            delta_seconds = last_checkpoint_delta_ms / 1000.0
+            sign = "+" if delta_seconds > 0 else ""
+            delta_text = f"Delta: {sign}{delta_seconds:0.3f}s"
+            if last_checkpoint_delta_ms < 0:
+                delta_color = (120, 210, 140)
+            elif last_checkpoint_delta_ms > 0:
+                delta_color = (220, 110, 100)
+            else:
+                delta_color = (180, 180, 190)
+            time_color = delta_color
+        else:
+            delta_text = "Delta: --"
+            delta_color = (180, 180, 190)
+            time_color = (200, 200, 210)
+        time_surface = font_bold.render(time_text, True, time_color)
+        time_rect = time_surface.get_rect(
+            center=(screen.get_width() // 2, screen.get_height() // 2 + 48)
+        )
+        screen.blit(time_surface, time_rect)
+        delta_surface = font_bold.render(delta_text, True, delta_color)
+        delta_rect = delta_surface.get_rect(
+            center=(screen.get_width() // 2, screen.get_height() // 2 + 74)
+        )
+        screen.blit(delta_surface, delta_rect)
 
     if hint_text is None:
         ghost_label = "Ghost:On" if ghost_enabled else "Ghost:Off"
@@ -488,6 +533,7 @@ def render_editor(
     selected_tile: str,
     status: str | None,
     start_angle: float,
+    creator_time_ms: int | None,
 ) -> None:
     screen.fill((18, 20, 24))
     height = len(tiles)
@@ -530,6 +576,25 @@ def render_editor(
     current_surface = font.render(current_text, True, (220, 220, 230))
     current_rect = current_surface.get_rect(center=(screen.get_width() // 2, 42))
     screen.blit(current_surface, current_rect)
+
+    solved_text = (
+        "Creator solved: Yes" if creator_time_ms is not None else "Creator solved: No"
+    )
+    solved_surface = font.render(solved_text, True, (210, 210, 220))
+    solved_rect = solved_surface.get_rect(
+        center=(screen.get_width() // 2, screen.get_height() // 2 - 14)
+    )
+    screen.blit(solved_surface, solved_rect)
+
+    if creator_time_ms is not None:
+        creator_text = f"Creator best: {creator_time_ms / 1000.0:0.3f}s"
+    else:
+        creator_text = "Creator best: --"
+    creator_surface = font.render(creator_text, True, (210, 210, 220))
+    creator_rect = creator_surface.get_rect(
+        center=(screen.get_width() // 2, screen.get_height() // 2 + 14)
+    )
+    screen.blit(creator_surface, creator_rect)
 
     hint_text = "Arrows=move, Space=paint, R=rotate start, S=test+save, B=back"
     hint_surface = font.render(hint_text, True, (200, 200, 210))

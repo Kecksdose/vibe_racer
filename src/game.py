@@ -71,6 +71,12 @@ class Game:
         self.finish_flash_until = 0
         self.checkpoints = self.map.checkpoints
         self.visited_checkpoints: set[tuple[int, int]] = set()
+        self.checkpoint_times: dict[tuple[int, int], int] = {}
+        self.last_checkpoint_time_ms: int | None = None
+        self.last_checkpoint_delta_ms: int | None = None
+        self.last_checkpoint_flash_until = 0
+        self.ghost_checkpoint_times: dict[tuple[int, int], int] | None = None
+        self.creator_checkpoint_times: dict[tuple[int, int], int] | None = None
         self.replay_path = Path("data/replays") / f"{self.track_id}_last.json"
         self.creator_replay_path = (
             Path("data/replays") / f"{self.track_id}_creator.json"
@@ -123,6 +129,9 @@ class Game:
         self.editor_prev_checkpoints: list[tuple[int, int]] | None = None
         self.editor_prev_ghost_enabled: bool | None = None
         self.editor_prev_creator_ghost_enabled: bool | None = None
+        self.editor_creator_time_ms: int | None = None
+        self.editor_saved_creator_time_ms: int | None = None
+        self.editor_saved_map: MapData | None = None
         self.editor_map_key: str | None = None
         self.editor_map_index = 0
         self.creator_toggle_armed = False
@@ -176,6 +185,13 @@ class Game:
             dt = self.clock.tick(TARGET_FPS) / 1000.0
             if self.countdown_active:
                 self._update_countdown(dt)
+                show_checkpoint = self._should_show_checkpoint_flash()
+                display_checkpoint_time = (
+                    self.last_checkpoint_time_ms if show_checkpoint else None
+                )
+                display_checkpoint_delta = (
+                    self.last_checkpoint_delta_ms if show_checkpoint else None
+                )
                 render_frame(
                     self.screen,
                     self.map,
@@ -195,11 +211,14 @@ class Game:
                     self.creator_ghost_enabled,
                     self._creator_ghost_available(),
                     self._checkpoint_status(),
+                    display_checkpoint_time,
+                    display_checkpoint_delta,
                     self.visited_checkpoints,
                     self._countdown_display(),
                     self._should_show_go_flash(),
                     self.state == "race",
-                    self.state == "race" and self._creator_time_beaten(),
+                    self.state == "race"
+                    and (self._creator_time_beaten() or self.role == "creator"),
                     "R=Restart  B=Back" if self.state == "editor_test" else None,
                 )
                 continue
@@ -242,14 +261,22 @@ class Game:
                                 self.run_finished = True
                                 self.freeze_car = True
                                 self.car.speed = 0.0
-                                self._maybe_save_best_time(self.elapsed_ms)
-                                self._save_replay()
+                                is_new_best = self._maybe_save_best_time(self.elapsed_ms)
+                                if is_new_best:
+                                    self._save_replay()
                                 self.finish_flash_until = pygame.time.get_ticks() + 1500
 
                 self._update_ghost(FIXED_TIMESTEP)
                 self._update_creator_ghost(FIXED_TIMESTEP)
                 self.accumulator -= FIXED_TIMESTEP
 
+            show_checkpoint = self._should_show_checkpoint_flash()
+            display_checkpoint_time = (
+                self.last_checkpoint_time_ms if show_checkpoint else None
+            )
+            display_checkpoint_delta = (
+                self.last_checkpoint_delta_ms if show_checkpoint else None
+            )
             render_frame(
                 self.screen,
                 self.map,
@@ -269,11 +296,14 @@ class Game:
                 self.creator_ghost_enabled,
                 self._creator_ghost_available(),
                 self._checkpoint_status(),
+                display_checkpoint_time,
+                display_checkpoint_delta,
                 self.visited_checkpoints,
                 None,
                 self._should_show_go_flash(),
                 self.state == "race",
-                self.state == "race" and self._creator_time_beaten(),
+                self.state == "race"
+                and (self._creator_time_beaten() or self.role == "creator"),
                 "R=Restart  B=Back" if self.state == "editor_test" else None,
             )
 
@@ -348,18 +378,26 @@ class Game:
         self.ghost_index = 0
         self.ghost_car = None
         self.ghost_active = False
+        self.ghost_checkpoint_times = None
         self.creator_ghost_inputs = []
         self.creator_ghost_index = 0
         self.creator_ghost_car = None
         self.creator_ghost_active = False
+        self.creator_checkpoint_times = None
         self.visited_checkpoints = set()
+        self.checkpoint_times = {}
+        self.last_checkpoint_time_ms = None
+        self.last_checkpoint_delta_ms = None
+        self.last_checkpoint_flash_until = 0
         self.creator_beaten_flash_until = 0
 
-    def _maybe_save_best_time(self, elapsed_ms: int) -> None:
+    def _maybe_save_best_time(self, elapsed_ms: int) -> bool:
         if self.best_time_ms is None or elapsed_ms < self.best_time_ms:
             self.best_time_ms = elapsed_ms
             save_best_time(self.db_path, self.track_id, elapsed_ms)
             self.best_flash_until = pygame.time.get_ticks() + 1500
+            return True
+        return False
         if (
             not self.creator_beaten
             and self.creator_time_ms is not None
@@ -380,6 +418,10 @@ class Game:
         self.ghost_index = 0
         self.ghost_car = None
         self.ghost_active = False
+        self.ghost_checkpoint_times = None
+        self.last_checkpoint_delta_ms = None
+        self.last_checkpoint_time_ms = None
+        self.last_checkpoint_flash_until = 0
         self.creator_beaten_flash_until = 0
 
     def _should_show_best_flash(self) -> bool:
@@ -408,11 +450,74 @@ class Game:
         tile_id = self.map.tile_at(tile_x, tile_y)
         return self.map.legend.get(tile_id, "road")
 
+    def _checkpoint_at(self, x: float, y: float) -> tuple[int, int] | None:
+        tile_x = int(x // TILE_SIZE)
+        tile_y = int(y // TILE_SIZE)
+        checkpoint = (tile_x, tile_y)
+        if checkpoint in self.checkpoints:
+            return checkpoint
+        return None
+
+    def _comparison_ghost_times(self) -> dict[tuple[int, int], int] | None:
+        if self.ghost_checkpoint_times is not None:
+            return self.ghost_checkpoint_times
+        if self.creator_checkpoint_times is not None and self._creator_ghost_available():
+            return self.creator_checkpoint_times
+        return None
+
+    def _record_checkpoint_time(self, checkpoint: tuple[int, int]) -> None:
+        time_ms = self.elapsed_ms
+        self.checkpoint_times[checkpoint] = time_ms
+        self.last_checkpoint_time_ms = time_ms
+        self.last_checkpoint_delta_ms = None
+        self.last_checkpoint_flash_until = pygame.time.get_ticks() + 1000
+        ghost_times = self._comparison_ghost_times()
+        if ghost_times is not None:
+            ghost_time = ghost_times.get(checkpoint)
+            if ghost_time is not None:
+                self.last_checkpoint_delta_ms = time_ms - ghost_time
+
+    def _should_show_checkpoint_flash(self) -> bool:
+        return pygame.time.get_ticks() < self.last_checkpoint_flash_until
+
+    def _compute_replay_checkpoint_times(
+        self, inputs: list[dict[str, bool]]
+    ) -> dict[tuple[int, int], int]:
+        times: dict[tuple[int, int], int] = {}
+        if not inputs or not self.checkpoints:
+            return times
+        ghost_car = self._spawn_car(self.map)
+        for index, values in enumerate(inputs):
+            replay_input = InputState.from_dict(values)
+            previous_x, previous_y = ghost_car.x, ghost_car.y
+            accel_multiplier, speed_multiplier, turn_multiplier = (
+                self._surface_multipliers(ghost_car, FIXED_TIMESTEP)
+            )
+            update_car(
+                ghost_car,
+                replay_input,
+                FIXED_TIMESTEP,
+                accel_multiplier=accel_multiplier,
+                max_speed_multiplier=speed_multiplier,
+                turn_multiplier=turn_multiplier,
+            )
+            self._resolve_collisions(ghost_car, previous_x, previous_y)
+            checkpoint = self._checkpoint_at(ghost_car.x, ghost_car.y)
+            if checkpoint is not None and checkpoint not in times:
+                time_ms = int((index + 1) * FIXED_TIMESTEP * 1000.0)
+                times[checkpoint] = time_ms
+                if len(times) >= len(self.checkpoints):
+                    break
+        return times
+
     def _update_checkpoints(self) -> None:
-        tile_x = int(self.car.x // TILE_SIZE)
-        tile_y = int(self.car.y // TILE_SIZE)
-        if (tile_x, tile_y) in self.checkpoints:
-            self.visited_checkpoints.add((tile_x, tile_y))
+        checkpoint = self._checkpoint_at(self.car.x, self.car.y)
+        if checkpoint is None:
+            return
+        if checkpoint in self.visited_checkpoints:
+            return
+        self.visited_checkpoints.add(checkpoint)
+        self._record_checkpoint_time(checkpoint)
 
     def _checkpoints_complete(self) -> bool:
         return len(self.visited_checkpoints) >= len(self.checkpoints)
@@ -461,54 +566,85 @@ class Game:
             and meta.get("start_angle") == self.map.start_angle
         )
 
+    def _run_step_index(self) -> int:
+        step_ms = FIXED_TIMESTEP * 1000.0
+        if step_ms <= 0.0:
+            return 0
+        return max(0, int(self.run_elapsed_ms / step_ms + 0.5))
+
     def _start_ghost(self) -> None:
         self._start_player_ghost()
         self._start_creator_ghost()
 
-    def _start_player_ghost(self) -> None:
-        if not self.ghost_enabled:
-            self.ghost_inputs = []
-            self.ghost_index = 0
-            self.ghost_car = None
-            self.ghost_active = False
+    def _sync_player_ghost_to_run(self) -> None:
+        if not (self.run_active or self.run_finished):
             return
+        self._start_player_ghost()
+        if not self.ghost_active:
+            return
+        target_index = self._run_step_index()
+        if target_index <= 0:
+            return
+        self._fast_forward_player_ghost(target_index)
+
+    def _sync_creator_ghost_to_run(self) -> None:
+        if not (self.run_active or self.run_finished):
+            return
+        self._start_creator_ghost()
+        if not self.creator_ghost_active:
+            return
+        target_index = self._run_step_index()
+        if target_index <= 0:
+            return
+        self._fast_forward_creator_ghost(target_index)
+
+    def _start_player_ghost(self) -> None:
+        self.ghost_inputs = []
+        self.ghost_index = 0
+        self.ghost_car = None
+        self.ghost_active = False
+        self.ghost_checkpoint_times = None
         if self.replay_path.exists():
             replay = load_replay(self.replay_path)
             if self._is_replay_compatible(replay):
                 self.ghost_inputs = replay.inputs
-                self.ghost_index = 0
-                self.ghost_car = self._spawn_car(self.map)
-                self.ghost_active = True
-            else:
-                self.ghost_inputs = []
-                self.ghost_index = 0
-                self.ghost_car = None
-                self.ghost_active = False
-        else:
-            self.ghost_inputs = []
-            self.ghost_index = 0
-            self.ghost_car = None
-            self.ghost_active = False
+                self.ghost_checkpoint_times = self._compute_replay_checkpoint_times(
+                    replay.inputs
+                )
+                if self.ghost_enabled:
+                    self.ghost_car = self._spawn_car(self.map)
+                    self.ghost_active = True
 
     def _start_creator_ghost(self) -> None:
-        if not self.creator_ghost_enabled or not self._creator_ghost_available():
-            self.creator_ghost_inputs = []
-            self.creator_ghost_index = 0
-            self.creator_ghost_car = None
-            self.creator_ghost_active = False
-            return
-        if self.creator_replay_path.exists():
-            replay = load_replay(self.creator_replay_path)
-            if self._is_replay_compatible(replay):
-                self.creator_ghost_inputs = replay.inputs
-                self.creator_ghost_index = 0
-                self.creator_ghost_car = self._spawn_car(self.map)
-                self.creator_ghost_active = True
-                return
         self.creator_ghost_inputs = []
         self.creator_ghost_index = 0
         self.creator_ghost_car = None
         self.creator_ghost_active = False
+        self.creator_checkpoint_times = None
+        if self.creator_replay_path.exists():
+            replay = load_replay(self.creator_replay_path)
+            if self._is_replay_compatible(replay):
+                self.creator_ghost_inputs = replay.inputs
+                self.creator_checkpoint_times = self._compute_replay_checkpoint_times(
+                    replay.inputs
+                )
+                if self.creator_ghost_enabled and self._creator_ghost_available():
+                    self.creator_ghost_car = self._spawn_car(self.map)
+                    self.creator_ghost_active = True
+
+    def _fast_forward_player_ghost(self, target_index: int) -> None:
+        steps = min(target_index, len(self.ghost_inputs))
+        for _ in range(steps):
+            if not self.ghost_active:
+                break
+            self._update_ghost(FIXED_TIMESTEP)
+
+    def _fast_forward_creator_ghost(self, target_index: int) -> None:
+        steps = min(target_index, len(self.creator_ghost_inputs))
+        for _ in range(steps):
+            if not self.creator_ghost_active:
+                break
+            self._update_creator_ghost(FIXED_TIMESTEP)
 
     def _update_ghost(self, dt: float) -> None:
         if not self.ghost_active or not self.ghost_car:
@@ -670,12 +806,16 @@ class Game:
             if not self.ghost_enabled:
                 self.ghost_car = None
                 self.ghost_active = False
+            else:
+                self._sync_player_ghost_to_run()
         elif event.key == pygame.K_c:
             if self._creator_ghost_available():
                 self.creator_ghost_enabled = not self.creator_ghost_enabled
                 if not self.creator_ghost_enabled:
                     self.creator_ghost_car = None
                     self.creator_ghost_active = False
+                else:
+                    self._sync_creator_ghost_to_run()
         elif event.key == pygame.K_b:
             if self.state == "editor_test":
                 self._cancel_editor_test()
@@ -876,8 +1016,10 @@ class Game:
         self.editor_prev_checkpoints = self.checkpoints
         self.editor_prev_ghost_enabled = self.ghost_enabled
         self.editor_prev_creator_ghost_enabled = self.creator_ghost_enabled
+        self.editor_saved_map = None
         try:
             editor_map = load_map(self._map_path(map_key))
+            self.editor_saved_map = editor_map
             self.editor_tiles = [row[:] for row in editor_map.tiles]
             self.editor_cursor = editor_map.start
             self.editor_start_angle = editor_map.start_angle
@@ -885,6 +1027,8 @@ class Game:
             self.editor_tiles = self._default_editor_tiles()
             self.editor_cursor = (1, 1)
             self.editor_start_angle = 0.0
+        self.editor_saved_creator_time_ms = load_creator_time(self.db_path, map_key)
+        self._refresh_editor_creator_time()
         self.editor_tile = "0"
         self.editor_status = None
         self.editor_pending_save = False
@@ -941,6 +1085,7 @@ class Game:
             self._clear_tile(self.editor_tile)
         self.editor_tiles[y][x] = self.editor_tile
         self.editor_status = None
+        self._refresh_editor_creator_time()
 
     def _rotate_editor_start(self) -> None:
         if not self.editor_tiles:
@@ -950,6 +1095,7 @@ class Game:
             return
         self.editor_start_angle = (self.editor_start_angle + math.pi / 2) % math.tau
         self.editor_status = None
+        self._refresh_editor_creator_time()
 
     def _start_editor_test(self) -> None:
         if not self._editor_has_required_tiles():
@@ -995,13 +1141,33 @@ class Game:
     def _complete_editor_test(self, elapsed_ms: int) -> None:
         if not self.editor_pending_save:
             return
-        self._save_custom_map()
-        save_creator_time(self.db_path, self.track_id, elapsed_ms)
-        self.creator_time_ms = elapsed_ms
-        clear_creator_beaten(self.db_path, self.track_id)
-        self.creator_beaten = False
-        self._save_creator_replay()
-        self.editor_status = f"Saved. Creator: {self._format_time(elapsed_ms)}"
+        map_changed = not self._editor_map_matches_saved()
+        previous_creator_time = self.creator_time_ms
+        self._save_custom_map(reset_records=map_changed)
+        should_update_creator = (
+            map_changed
+            or previous_creator_time is None
+            or elapsed_ms < previous_creator_time
+        )
+        if should_update_creator:
+            save_creator_time(self.db_path, self.track_id, elapsed_ms)
+            self.creator_time_ms = elapsed_ms
+            self._save_creator_replay()
+            clear_creator_beaten(self.db_path, self.track_id)
+            self.creator_beaten = False
+            self.editor_saved_creator_time_ms = elapsed_ms
+            self.editor_creator_time_ms = elapsed_ms
+            self.editor_status = f"Saved. Creator: {self._format_time(elapsed_ms)}"
+        else:
+            if previous_creator_time is not None:
+                self.editor_status = (
+                    "Saved. Creator best stays: "
+                    f"{self._format_time(previous_creator_time)}"
+                )
+            else:
+                self.editor_status = f"Saved. Creator: {self._format_time(elapsed_ms)}"
+            self.editor_saved_creator_time_ms = previous_creator_time
+            self.editor_creator_time_ms = previous_creator_time
         self.run_active = False
         self.run_finished = True
         self.freeze_car = True
@@ -1011,6 +1177,7 @@ class Game:
             self.ghost_enabled = self.editor_prev_ghost_enabled
         if self.editor_prev_creator_ghost_enabled is not None:
             self.creator_ghost_enabled = self.editor_prev_creator_ghost_enabled
+        self._update_editor_saved_state()
         self.state = "editor"
 
     def _cancel_editor_test(self) -> None:
@@ -1064,11 +1231,16 @@ class Game:
         if start is None or finish is None:
             return None
         checkpoints = self._find_tiles(self.editor_tiles, "5")
+        legend = (
+            self.editor_saved_map.legend
+            if self.editor_saved_map is not None
+            else self.map.legend
+        )
         return MapData(
             width=width,
             height=height,
             tiles=self.editor_tiles,
-            legend=self.map.legend,
+            legend=legend,
             start=start,
             finish=finish,
             checkpoints=checkpoints,
@@ -1100,7 +1272,31 @@ class Game:
                 if value == tile_id:
                     self.editor_tiles[y][x] = "0"
 
-    def _save_custom_map(self) -> None:
+    def _editor_map_matches_saved(self) -> bool:
+        if self.editor_saved_map is None:
+            return False
+        editor_map = self._build_editor_map()
+        if editor_map is None:
+            return False
+        return editor_map == self.editor_saved_map
+
+    def _refresh_editor_creator_time(self) -> None:
+        if self._editor_map_matches_saved():
+            self.editor_creator_time_ms = self.editor_saved_creator_time_ms
+        else:
+            self.editor_creator_time_ms = None
+
+    def _update_editor_saved_state(self) -> None:
+        map_key = self.editor_map_key or "custom"
+        map_path = self._map_path(map_key)
+        try:
+            self.editor_saved_map = load_map(map_path)
+        except ValueError:
+            self.editor_saved_map = None
+        self.editor_saved_creator_time_ms = load_creator_time(self.db_path, map_key)
+        self._refresh_editor_creator_time()
+
+    def _save_custom_map(self, reset_records: bool = True) -> None:
         map_key = self.editor_map_key or "custom"
         payload = {
             "width": len(self.editor_tiles[0]) if self.editor_tiles else 0,
@@ -1118,26 +1314,29 @@ class Game:
         }
         map_path = self._map_path(map_key)
         map_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        clear_best_time(self.db_path, map_key)
-        replay_path = Path("data/replays") / f"{map_key}_last.json"
-        if replay_path.exists():
-            replay_path.unlink()
-        creator_replay_path = Path("data/replays") / f"{map_key}_creator.json"
-        if creator_replay_path.exists():
-            creator_replay_path.unlink()
-        clear_creator_beaten(self.db_path, map_key)
-        if self.track_id == map_key:
-            self.best_time_ms = None
-            self.ghost_inputs = []
-            self.ghost_index = 0
-            self.ghost_car = None
-            self.ghost_active = False
-            self.creator_ghost_enabled = False
-            self.creator_ghost_inputs = []
-            self.creator_ghost_index = 0
-            self.creator_ghost_car = None
-            self.creator_ghost_active = False
-            self.creator_beaten = False
+        if reset_records:
+            clear_best_time(self.db_path, map_key)
+            replay_path = Path("data/replays") / f"{map_key}_last.json"
+            if replay_path.exists():
+                replay_path.unlink()
+            creator_replay_path = Path("data/replays") / f"{map_key}_creator.json"
+            if creator_replay_path.exists():
+                creator_replay_path.unlink()
+            clear_creator_beaten(self.db_path, map_key)
+            if self.track_id == map_key:
+                self.best_time_ms = None
+                self.ghost_inputs = []
+                self.ghost_index = 0
+                self.ghost_car = None
+                self.ghost_active = False
+                self.ghost_checkpoint_times = None
+                self.creator_ghost_enabled = False
+                self.creator_ghost_inputs = []
+                self.creator_ghost_index = 0
+                self.creator_ghost_car = None
+                self.creator_ghost_active = False
+                self.creator_checkpoint_times = None
+                self.creator_beaten = False
         self.editor_status = "Map saved"
 
     def _editor_has_required_tiles(self) -> bool:
@@ -1204,6 +1403,7 @@ class Game:
                 self.editor_tile,
                 self.editor_status,
                 self.editor_start_angle,
+                self.editor_creator_time_ms,
             )
             return
         if self.state == "about":
@@ -1214,6 +1414,7 @@ class Game:
                     "Vibe Racer is made with Pygame.",
                     "Created by Timon + OpenCode.",
                     "Made with GPT-5.2 Codex from OpenAI.",
+                    "Made with Codex.",
                 ],
                 hint_text="Up/Down=move, Enter=select, B=back, Q=quit",
                 car_colors=[
